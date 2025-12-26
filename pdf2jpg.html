@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF to PNG/JPG 轉換器</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        body { font-family: "Microsoft JhengHei", sans-serif; background-color: #f4f6f9; display: flex; flex-direction: column; align-items: center; padding: 40px; margin: 0; }
+        .container { background: white; padding: 40px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); width: 100%; max-width: 950px; }
+        h1 { color: #2c3e50; text-align: center; margin-bottom: 35px; font-weight: 800; }
+        
+        /* 拖曳區域 */
+        #drop-zone { 
+            border: 3px dashed #3498db; 
+            border-radius: 15px; 
+            padding: 50px; 
+            text-align: center; 
+            color: #3498db; 
+            cursor: pointer; 
+            transition: all 0.3s; 
+            background: #fdfdfd; 
+            margin-bottom: 30px; 
+        }
+        #drop-zone:hover { background: #f0f7ff; border-color: #2980b9; }
+        #drop-zone.highlight { background: #e8f4fd; border-color: #1a5276; }
+
+        /* 控制列 */
+        .controls { 
+            display: flex; 
+            flex-wrap: wrap;
+            justify-content: center; 
+            gap: 15px; 
+            align-items: center; 
+            margin-bottom: 30px; 
+            padding: 25px;
+            background: #f8f9fa;
+            border-radius: 12px;
+        }
+        select { padding: 12px 15px; border-radius: 8px; border: 1px solid #ced4da; font-size: 16px; min-width: 200px; outline: none; }
+        
+        /* 按鈕樣式 */
+        .btn { padding: 12px 25px; border-radius: 8px; border: none; cursor: pointer; font-weight: bold; font-size: 16px; transition: 0.2s; color: white; }
+        .btn-png { background-color: #10b981; } 
+        .btn-png:hover { background-color: #059669; transform: translateY(-2px); }
+        .btn-jpg { background-color: #3b82f6; } 
+        .btn-jpg:hover { background-color: #2563eb; transform: translateY(-2px); }
+        .btn:active { transform: translateY(0); }
+
+        /* 預覽區域 */
+        #preview-container { width: 100%; margin-top: 20px; }
+        .page-item { background: #fff; border: 1px solid #e9ecef; padding: 20px; margin-bottom: 30px; border-radius: 12px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
+        .page-item img { max-width: 100%; border-radius: 4px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); margin: 15px 0; }
+        .save-btn { display: inline-block; padding: 10px 20px; color: white; text-decoration: none; border-radius: 6px; font-size: 14px; margin-top: 10px; font-weight: 600; }
+        .save-png { background: #059669; }
+        .save-jpg { background: #2563eb; }
+
+        .loading-overlay { text-align: center; color: #666; padding: 20px; display: none; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>PDF to PNG/JPG 轉換器</h1>
+        
+        <div id="drop-zone">
+            <div style="font-size: 40px; margin-bottom: 10px;">📄</div>
+            <strong>將 PDF 檔案拖曳至此</strong><br>或點擊此處選取檔案
+        </div>
+        <input type="file" id="file-input" accept="application/pdf" style="display:none">
+
+        <div class="controls">
+            <label style="font-weight: bold;">解析度設定：</label>
+            <select id="scale-select">
+                <option value="1">普通 (螢幕看稿)</option>
+                <option value="2">清晰 (一般辦公)</option>
+                <option value="3">極致 (300 DPI 高清)</option>
+                <option value="5" selected>印刷等級 (超高解析度)</option> 
+            </select>
+            
+            <button id="convert-png-btn" class="btn btn-png">開始轉換為 PNG</button>
+            <button id="convert-jpg-btn" class="btn btn-jpg">開始轉換為 JPG</button>
+        </div>
+
+        <div id="loading" class="loading-overlay">🚀 正在進行高品質渲染，請稍候...</div>
+        <div id="preview-container"></div>
+    </div>
+
+    <script>
+        const pdfjsLib = window['pdfjs-dist/build/pdf'];
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const previewContainer = document.getElementById('preview-container');
+        const loading = document.getElementById('loading');
+        let selectedFile = null;
+
+        // 拖曳攔截
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(n => {
+            dropZone.addEventListener(n, e => { e.preventDefault(); e.stopPropagation(); });
+        });
+
+        dropZone.addEventListener('dragover', () => dropZone.classList.add('highlight'));
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('highlight'));
+
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = e => { if(e.target.files[0]) loadFile(e.target.files[0]); };
+        
+        dropZone.addEventListener('drop', e => {
+            dropZone.classList.remove('highlight');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type === "application/pdf") loadFile(file);
+            else alert("請上傳 PDF 檔案！");
+        });
+
+        function loadFile(file) {
+            selectedFile = file;
+            dropZone.innerHTML = `<div style="font-size: 40px; margin-bottom: 10px;">✅</div><strong style="color:#2ecc71">已讀取：${file.name}</strong><br>請選擇下方格式開始轉換`;
+        }
+
+        // 轉換邏輯
+        async function startConversion(format) {
+            if (!selectedFile) return alert("請先選取 PDF 檔案喔！");
+            
+            previewContainer.innerHTML = "";
+            loading.style.display = "block";
+            
+            const scale = parseFloat(document.getElementById('scale-select').value);
+            const arrayBuffer = await selectedFile.arrayBuffer();
+            
+            try {
+                const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const viewport = page.getViewport({ scale: scale });
+
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+
+                    await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+                    // 根據選擇的格式輸出
+                    let imgData, ext, btnClass;
+                    if (format === 'png') {
+                        imgData = canvas.toDataURL('image/png');
+                        ext = 'png';
+                        btnClass = 'save-png';
+                    } else {
+                        imgData = canvas.toDataURL('image/jpeg', 1.0); // JPG 最高品質 1.0
+                        ext = 'jpg';
+                        btnClass = 'save-jpg';
+                    }
+                    
+                    const item = document.createElement('div');
+                    item.className = 'page-item';
+                    item.innerHTML = `
+                        <p><strong>第 ${i} 頁 / 共 ${pdf.numPages} 頁</strong></p>
+                        <img src="${imgData}">
+                        <br>
+                        <a href="${imgData}" download="page-${i}.${ext}" class="save-btn ${btnClass}">儲存此頁 ${ext.toUpperCase()}</a>
+                    `;
+                    previewContainer.appendChild(item);
+                }
+            } catch (err) {
+                alert("錯誤：" + err.message);
+            } finally {
+                loading.style.display = "none";
+            }
+        }
+
+        document.getElementById('convert-png-btn').onclick = () => startConversion('png');
+        document.getElementById('convert-jpg-btn').onclick = () => startConversion('jpg');
+    </script>
+</body>
+</html>
